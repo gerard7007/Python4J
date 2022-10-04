@@ -1,24 +1,89 @@
 package com.github.gerard.python4j;
 
-import java.io.File;
+import com.github.gerard.python4j.exceptions.PythonException;
+import sun.misc.IOUtils;
+
+import java.io.*;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Scanner;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class PythonProcess implements AutoCloseable {
+public class PythonProcess {
 
     private final Python python;
     protected File mainFile;
     protected File workingDir;
     protected List<String> args;
     protected boolean inheritIO;
-    protected Executor executor;
+    protected ExecutorService executor;
     protected Process process;
+
+    protected PythonProcess(Python python) {
+        this.python = python;
+    }
+
+    private CompletableFuture<String> readStreamAsync(InputStream inputStream) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[1];
+
+                while (inputStream.read(buffer) != -1) {
+                    baos.write(buffer, 0, buffer.length);
+                }
+
+                String output = baos.toString("UTF-8");
+                return output.endsWith("\n") ? output.substring(0, output.length() - 1) : output;
+            } catch (Throwable t) {
+                throw new RuntimeException(t);
+            }
+        });
+    }
+
+    /**
+     * @return Result future
+     */
+    public CompletableFuture<String> asyncRun() throws IOException, PythonException {
+        ProcessBuilder processBuilder = new ProcessBuilder();
+        processBuilder.directory(workingDir);
+        if (inheritIO) processBuilder.inheritIO();
+
+        List<String> command = new ArrayList<>();
+        command.add(python.getPath());
+        command.add(mainFile.getAbsolutePath());
+        command.addAll(args);
+
+        process = processBuilder.command(command).start();
+
+        CompletableFuture<String> outFuture = readStreamAsync(process.getInputStream());
+        CompletableFuture<String> errFuture = readStreamAsync(process.getErrorStream());
+
+        String error = errFuture.join();
+
+        if (error != null && !error.isEmpty()) {
+            throw new PythonException(error.endsWith("\n") ? error.substring(0, error.length() - 1) : error);
+        }
+
+        return outFuture;
+    }
+
+    public File getMainFile() {
+        return mainFile;
+    }
+
+    public File getWorkingDir() {
+        return workingDir;
+    }
+
+    public List<String> getArgs() {
+        return args;
+    }
+
+    public Python getPython() {
+        return python;
+    }
 
     public static class Builder {
 
@@ -27,7 +92,7 @@ public class PythonProcess implements AutoCloseable {
         private File workingDir;
         private List<String> args;
         protected boolean inheritIO;
-        private Executor executor;
+        private ExecutorService executor;
 
         public Builder(Python python) {
             this.python = python;
@@ -57,7 +122,7 @@ public class PythonProcess implements AutoCloseable {
             return this;
         }
 
-        public Builder executor(Executor executor) {
+        public Builder executor(ExecutorService executor) {
             this.executor = executor;
             return this;
         }
@@ -94,73 +159,5 @@ public class PythonProcess implements AutoCloseable {
         public int getExitCode() {
             return exitCode;
         }
-    }
-
-    protected PythonProcess(Python python) {
-        this.python = python;
-    }
-
-    /**
-     * @return Result future
-     */
-    public CompletableFuture<Result> asyncRun() {
-        CompletableFuture<Result> future = new CompletableFuture<>();
-
-        executor.execute(() -> {
-            try {
-                ProcessBuilder processBuilder = new ProcessBuilder();
-                processBuilder.directory(workingDir);
-                if (inheritIO) processBuilder.inheritIO();
-
-                List<String> command = new ArrayList<>();
-                command.add(python.getPath());
-                command.add(mainFile.getAbsolutePath());
-                command.addAll(args);
-
-                process = processBuilder.command(command).start();
-
-                String output = null;
-
-                try (Scanner scanner = new Scanner(System.in)) {
-                    StringBuilder sb = new StringBuilder();
-                    String line;
-
-                    while ((line = scanner.nextLine()) != null) {
-                        sb.append(line).append("\n");
-                    }
-
-                    output = sb.toString();
-                }
-
-                Result result = new Result(process.waitFor(), output);
-
-                future.complete(result);
-            } catch (Throwable t) {
-                future.completeExceptionally(t);
-            }
-        });
-
-        return future;
-    }
-
-    @Override
-    public void close() throws Exception {
-        // TODO: auto close
-    }
-
-    public File getMainFile() {
-        return mainFile;
-    }
-
-    public File getWorkingDir() {
-        return workingDir;
-    }
-
-    public List<String> getArgs() {
-        return args;
-    }
-
-    public Python getPython() {
-        return python;
     }
 }

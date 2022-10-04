@@ -11,11 +11,15 @@ public class PythonTest {
         Python python = Python.getInstance(PythonVersion.Python3);
 
         PythonProcess process = python.newProcess()
-                .mainFile(new File("main.py"))
+                .mainFile(new File("ext/main.py"))
                 .args("arg1", "arg2")
+                // .inheritIO(true)
                 .build();
 
-        System.out.println(process.toString());
+        String result = process.asyncRun().join();
+
+        System.out.println(result);
+        System.out.println("Finished !");
 
 
     }
